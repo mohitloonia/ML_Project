@@ -1,61 +1,92 @@
 import os
 import sys
-
-import numpy as np 
-import pandas as pd
 import pickle
-from sklearn.metrics import r2_score
-from sklearn.model_selection import GridSearchCV
+
+from sklearn.model_selection import GridSearchCV, KFold
+from sklearn.pipeline import Pipeline
 
 from src.exception import CustomException
 
+
 def save_object(file_path, obj):
     try:
-        dir_path = os.path.dirname(file_path)
+        directory = os.path.dirname(file_path)
 
-        os.makedirs(dir_path, exist_ok=True)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
 
-        with open(file_path, "wb") as file_obj:
-            pickle.dump(obj, file_obj)
-
-    except Exception as e:
-        raise CustomException(e, sys)
-    
-def evaluate_models(X_train, y_train,X_test,y_test,models,param):
-    try:
-        report = {}
-
-        for i in range(len(list(models))):
-            model = list(models.values())[i]
-            para=param[list(models.keys())[i]]
-
-            gs = GridSearchCV(model,para,cv=3)
-            gs.fit(X_train,y_train)
-
-            model.set_params(**gs.best_params_)
-            model.fit(X_train,y_train)
-
-            #model.fit(X_train, y_train)  # Train model
-
-            y_train_pred = model.predict(X_train)
-
-            y_test_pred = model.predict(X_test)
-
-            train_model_score = r2_score(y_train, y_train_pred)
-
-            test_model_score = r2_score(y_test, y_test_pred)
-
-            report[list(models.keys())[i]] = test_model_score
-
-        return report
+        with open(file_path, "wb") as file:
+            pickle.dump(obj, file)
 
     except Exception as e:
         raise CustomException(e, sys)
-    
+
+
 def load_object(file_path):
     try:
-        with open(file_path, "rb") as file_obj:
-            return pickle.load(file_obj)
+        with open(file_path, "rb") as file:
+            return pickle.load(file)
+
+    except Exception as e:
+        raise CustomException(e, sys)
+
+
+def evaluate_models(
+    X_train, y_train, X_test, y_test, models, param
+):
+    try:
+        # Imported here to avoid circular imports.
+        from src.components.data_transformation import DataTransformation
+
+        report = {}
+
+        cv = KFold(
+            n_splits=3,
+            shuffle=True,
+            random_state=42
+        )
+
+        for name, model in list(models.items()):
+            print(f"Training {name}...", flush=True)
+
+            preprocessor = (
+                DataTransformation().get_data_transformer_object()
+            )
+
+            preprocessor.set_params(
+                cat_pipelines__one_hot_encoder__handle_unknown="ignore"
+            )
+
+            pipeline = Pipeline([
+                ("preprocessor", preprocessor),
+                ("model", model)
+            ])
+
+            parameter_grid = {
+                f"model__{key}": values
+                for key, values in param[name].items()
+            }
+
+            search = GridSearchCV(
+                estimator=pipeline,
+                param_grid=parameter_grid,
+                cv=cv,
+                scoring="r2",
+                refit=True,
+                error_score="raise"
+            )
+
+            search.fit(X_train, y_train)
+
+            models[name] = search.best_estimator_
+            report[name] = float(search.best_score_)
+
+            print(
+                f"{name}: CV R² = {report[name]:.4f}",
+                flush=True
+            )
+
+        return report
 
     except Exception as e:
         raise CustomException(e, sys)
